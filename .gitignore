@@ -1,0 +1,26 @@
+# Engine internal (read-only)
+engine-docs/
+examples/
+templates/
+urhox-libs/
+schemas/
+prompts/
+.emmylua/
+.claude/
+.codex/
+.cursor/
+.gemini/
+skills/
+tools/
+
+# Build & temp
+dist/
+.tmp/
+.build/
+.project/
+logs/
+node_modules/
+
+# OS
+.DS_Store
+Thumbs.db
