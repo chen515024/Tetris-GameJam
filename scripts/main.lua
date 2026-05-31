@@ -90,6 +90,13 @@ local moveHeld = false
 
 -- 菜单选择
 local menuSelection = 1  -- 1=常规模式, 2=无尽模式
+local gameoverSelection = 1  -- 1=重新开始, 2=回到首页
+
+-- 粒子系统
+local particles = {}
+
+-- 空格键手动边缘检测（绕过Sample拦截）
+local spaceWasDown = false
 
 -- 随机包
 local bag = {}
@@ -123,6 +130,8 @@ local function saveLeaderboard()
 end
 
 local function getCurrentLeaderboard()
+    -- 每次都从文件重新读取，确保数据最新
+    loadLeaderboard()
     if gameMode == "endless" then
         return leaderboard_endless
     end
@@ -261,6 +270,53 @@ local function calcGhostY(piece)
     return gy
 end
 
+local function spawnLineParticles(row)
+    local cs = cellSize
+    local ox = boardOffsetX
+    local oy = boardOffsetY
+    for c = 1, CONFIG.COLS do
+        local color = board[row][c] or {150, 200, 255, 255}
+        local cx = ox + (c - 1) * cs + cs / 2
+        local cy = oy + (row - 1) * cs + cs / 2
+        -- 每个格子生成3-5个粒子
+        local count = math.random(3, 5)
+        for _ = 1, count do
+            local angle = math.random() * math.pi * 2
+            local speed = math.random(60, 180)
+            local size = math.random(3, 7)
+            table.insert(particles, {
+                x = cx + math.random(-4, 4),
+                y = cy + math.random(-4, 4),
+                vx = math.cos(angle) * speed,
+                vy = math.sin(angle) * speed - math.random(30, 80),
+                size = size,
+                life = 1.0,
+                decay = math.random(150, 280) / 100,  -- 0.5~1.0秒消失
+                r = math.min(255, color[1] + math.random(-20, 40)),
+                g = math.min(255, color[2] + math.random(-20, 40)),
+                b = math.min(255, color[3] + math.random(-20, 40)),
+            })
+        end
+    end
+end
+
+local function updateParticles(dt)
+    local i = 1
+    while i <= #particles do
+        local p = particles[i]
+        p.x = p.x + p.vx * dt
+        p.y = p.y + p.vy * dt
+        p.vy = p.vy + 300 * dt  -- 重力
+        p.life = p.life - p.decay * dt
+        p.size = p.size * (0.97)
+        if p.life <= 0 or p.size < 0.5 then
+            table.remove(particles, i)
+        else
+            i = i + 1
+        end
+    end
+end
+
 local function clearLines()
     local cleared = 0
     local r = CONFIG.ROWS
@@ -273,6 +329,7 @@ local function clearLines()
             end
         end
         if full then
+            spawnLineParticles(r)
             table.remove(board, r)
             local newRow = {}
             for c = 1, CONFIG.COLS do
@@ -389,6 +446,7 @@ end
 
 local function endGame()
     gameState = "gameover"
+    gameoverSelection = 1
     addScoreToLeaderboard(score)
     print("=== 游戏结束 === 得分: " .. score)
 end
@@ -397,6 +455,7 @@ local function startGame(mode)
     gameMode = mode or "timed"
     initBoard()
     bag = {}
+    particles = {}
     score = 0
     level = 1
     linesCleared = 0
@@ -427,6 +486,9 @@ local function dropInterval()
 end
 
 local function updateGame(dt)
+    -- 粒子始终更新（即使暂停也要播放完动画）
+    updateParticles(dt)
+
     if gameState ~= "playing" then return end
 
     -- 时间处理
@@ -568,6 +630,23 @@ local function drawCurrentPiece(vg)
         local row = currentPiece.y + b[2]
         if row >= 1 and row <= CONFIG.ROWS then
             drawCell(vg, ox + (col-1) * cs, oy + (row-1) * cs, cs, currentPiece.color)
+        end
+    end
+end
+
+local function drawParticles(vg)
+    for _, p in ipairs(particles) do
+        local alpha = math.floor(p.life * 255)
+        nvgBeginPath(vg)
+        nvgCircle(vg, p.x, p.y, p.size)
+        nvgFillColor(vg, nvgRGBA(p.r, p.g, p.b, alpha))
+        nvgFill(vg)
+        -- 发光效果
+        if p.size > 2 then
+            nvgBeginPath(vg)
+            nvgCircle(vg, p.x, p.y, p.size * 1.8)
+            nvgFillColor(vg, nvgRGBA(p.r, p.g, p.b, math.floor(alpha * 0.2)))
+            nvgFill(vg)
         end
     end
 end
@@ -866,9 +945,64 @@ local function drawGameOver(vg)
     end
     nvgText(vg, leftX, screenH * 0.40 + 30, "Lv." .. level .. " | " .. linesCleared .. " lines" .. timeInfo)
 
+    -- 两个按钮：重新开始 / 回到首页
+    local btnW = 180
+    local btnH = 42
+    local gap = 16
+    local btn1Y = screenH * 0.55 - btnH - gap / 2
+    local btn2Y = screenH * 0.55 + gap / 2
+
+    -- 按钮1: 重新开始
+    local sel1 = (gameoverSelection == 1)
+    nvgBeginPath(vg)
+    nvgRoundedRect(vg, leftX - btnW / 2, btn1Y, btnW, btnH, 6)
+    if sel1 then
+        nvgFillColor(vg, nvgRGBA(0, 160, 220, 230))
+    else
+        nvgFillColor(vg, nvgRGBA(40, 45, 65, 200))
+    end
+    nvgFill(vg)
+    nvgStrokeColor(vg, sel1 and nvgRGBA(80, 220, 255, 255) or nvgRGBA(70, 80, 110, 180))
+    nvgStrokeWidth(vg, sel1 and 2 or 1)
+    nvgStroke(vg)
     nvgFontSize(vg, 18)
-    nvgFillColor(vg, nvgRGBA(200, 210, 240, 230))
-    nvgText(vg, leftX, screenH * 0.57, "按 Enter/Space 返回菜单")
+    nvgFillColor(vg, nvgRGBA(255, 255, 255, sel1 and 255 or 170))
+    nvgTextAlign(vg, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
+    nvgText(vg, leftX, btn1Y + btnH / 2, "重新开始")
+    if sel1 then
+        nvgFillColor(vg, nvgRGBA(255, 255, 100, 255))
+        nvgTextAlign(vg, NVG_ALIGN_RIGHT + NVG_ALIGN_MIDDLE)
+        nvgText(vg, leftX - btnW / 2 - 8, btn1Y + btnH / 2, ">")
+    end
+
+    -- 按钮2: 回到首页
+    local sel2 = (gameoverSelection == 2)
+    nvgBeginPath(vg)
+    nvgRoundedRect(vg, leftX - btnW / 2, btn2Y, btnW, btnH, 6)
+    if sel2 then
+        nvgFillColor(vg, nvgRGBA(100, 60, 160, 230))
+    else
+        nvgFillColor(vg, nvgRGBA(40, 45, 65, 200))
+    end
+    nvgFill(vg)
+    nvgStrokeColor(vg, sel2 and nvgRGBA(180, 120, 255, 255) or nvgRGBA(70, 80, 110, 180))
+    nvgStrokeWidth(vg, sel2 and 2 or 1)
+    nvgStroke(vg)
+    nvgFontSize(vg, 18)
+    nvgFillColor(vg, nvgRGBA(255, 255, 255, sel2 and 255 or 170))
+    nvgTextAlign(vg, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
+    nvgText(vg, leftX, btn2Y + btnH / 2, "回到首页")
+    if sel2 then
+        nvgFillColor(vg, nvgRGBA(255, 255, 100, 255))
+        nvgTextAlign(vg, NVG_ALIGN_RIGHT + NVG_ALIGN_MIDDLE)
+        nvgText(vg, leftX - btnW / 2 - 8, btn2Y + btnH / 2, ">")
+    end
+
+    -- 操作提示
+    nvgFontSize(vg, 13)
+    nvgFillColor(vg, nvgRGBA(140, 150, 180, 160))
+    nvgTextAlign(vg, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
+    nvgText(vg, leftX, btn2Y + btnH + 20, "↑↓ 选择 | Enter/Space 确认")
 
     -- 右半边：排行榜
     local rightX = screenW * 0.7
@@ -967,11 +1101,13 @@ function HandleRender(eventType, eventData)
     elseif gameState == "playing" then
         drawBoard(vg)
         drawCurrentPiece(vg)
+        drawParticles(vg)
         drawSidePanelLeft(vg)
         drawSidePanelRight(vg)
     elseif gameState == "gameover" then
         drawBoard(vg)
         drawCurrentPiece(vg)
+        drawParticles(vg)
         drawGameOver(vg)
     end
 
@@ -982,6 +1118,23 @@ end
 ---@param eventData UpdateEventData
 function HandleUpdate(eventType, eventData)
     local dt = eventData["TimeStep"]:GetFloat()
+
+    -- 空格键手动边缘检测（Sample工具库会拦截KEY_SPACE的Press和Event）
+    local spaceIsDown = input:GetKeyDown(KEY_SPACE)
+    if spaceIsDown and not spaceWasDown then
+        if gameState == "menu" then
+            local mode = menuSelection == 1 and "timed" or "endless"
+            startGame(mode)
+        elseif gameState == "gameover" then
+            if gameoverSelection == 1 then
+                startGame(gameMode)
+            else
+                gameState = "menu"
+            end
+        end
+    end
+    spaceWasDown = spaceIsDown
+
     updateGame(dt)
 end
 
@@ -1003,8 +1156,16 @@ function HandleKeyDown(eventType, eventData)
     end
 
     if gameState == "gameover" then
-        if key == KEY_RETURN or key == KEY_SPACE then
-            gameState = "menu"
+        if key == KEY_UP or key == KEY_W then
+            gameoverSelection = gameoverSelection == 1 and 2 or 1
+        elseif key == KEY_DOWN or key == KEY_S then
+            gameoverSelection = gameoverSelection == 2 and 1 or 2
+        elseif key == KEY_RETURN or key == KEY_SPACE then
+            if gameoverSelection == 1 then
+                startGame(gameMode)  -- 重新开始同一模式
+            else
+                gameState = "menu"
+            end
         end
         return
     end
@@ -1043,7 +1204,25 @@ end
 
 function HandleMouseClick(eventType, eventData)
     if gameState == "gameover" then
-        gameState = "menu"
+        local dpr = graphics:GetDPR()
+        local mx = input.mousePosition.x / dpr
+        local my = input.mousePosition.y / dpr
+
+        local leftX = screenW * 0.3
+        local btnW = 180
+        local btnH = 42
+        local gap = 16
+        local btn1Y = screenH * 0.55 - btnH - gap / 2
+        local btn2Y = screenH * 0.55 + gap / 2
+        local btnLeft = leftX - btnW / 2
+
+        if mx >= btnLeft and mx <= btnLeft + btnW then
+            if my >= btn1Y and my <= btn1Y + btnH then
+                startGame(gameMode)
+            elseif my >= btn2Y and my <= btn2Y + btnH then
+                gameState = "menu"
+            end
+        end
     elseif gameState == "menu" then
         -- 检测点击位置是否在按钮上
         local dpr = graphics:GetDPR()
